@@ -1,0 +1,162 @@
+<div class="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-4xl mx-auto">
+    <!-- Header et formulaire -->
+    <div class="text-center mb-12">
+      <h1 class="text-4xl font-extrabold text-gray-900 mb-2">GitHub Wrapped</h1>
+      <p class="text-xl text-gray-600">Your coding year in review</p>
+
+      <div class="mt-8 max-w-md mx-auto">
+        <div class="flex gap-2">
+          <input
+            [(ngModel)]="username"
+            type="text"
+            placeholder="GitHub username"
+            class="flex-1 px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          >
+          <button
+            (click)="fetchStats()"
+            [disabled]="loading"
+            class="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          >
+            {{ loading ? 'Loading...' : 'Generate' }}
+          </button>
+        </div>
+
+        <div class="mt-4 text-sm text-gray-600 text-left">
+          <button
+            (click)="toggleTokenInput()"
+            class="text-blue-600 hover:underline"
+          >
+            {{ showTokenInput ? 'Hide' : 'Need GitHub token?' }}
+          </button>
+
+          <div *ngIf="showTokenInput" class="mt-2 p-3 bg-yellow-50 rounded-lg">
+            <p class="text-yellow-800 mb-2">
+              Create a personal access token with <code class="bg-yellow-100 px-1 rounded">read:user</code> and <code class="bg-yellow-100 px-1 rounded">repo</code> permissions.
+            </p>
+            <input
+              [(ngModel)]="githubToken"
+              type="password"
+              placeholder="GitHub token"
+              class="w-full px-3 py-2 rounded border border-gray-300"
+            >
+          </div>
+        </div>
+
+        <div *ngIf="error" class="mt-4 p-3 bg-red-50 text-red-700 rounded-lg">
+          {{ error }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Résultats -->
+    <div *ngIf="stats" class="bg-white rounded-xl shadow-lg overflow-hidden">
+      <!-- En-tête profil -->
+      <div class="bg-gradient-to-r from-blue-600 to-blue-800 p-8 text-white">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-6">
+            <img [src]="stats.avatarUrl" alt="Avatar" class="w-20 h-20 rounded-full border-4 border-white/20">
+            <div>
+              <h2 class="text-2xl font-bold">{{ stats.username }}</h2>
+              <p class="text-blue-100">GitHub Wrapped {{ currentYear }}</p>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm text-blue-200">Followers</div>
+            <div class="text-2xl font-bold">{{ stats.followers }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats principales -->
+      <div class="p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- Streak -->
+        <div class="bg-gray-50 p-6 rounded-lg border border-gray-200">
+          <div class="text-gray-500 mb-1">Longest streak</div>
+          <div class="text-4xl font-bold text-gray-900">{{ stats.longestStreak }} days</div>
+          <div class="mt-2 text-sm text-gray-500">Your best coding streak this year</div>
+        </div>
+
+        <!-- Total commits -->
+        <div class="bg-gray-50 p-6 rounded-lg border border-gray-200">
+          <div class="text-gray-500 mb-1">Total commits</div>
+          <div class="text-4xl font-bold text-gray-900">{{ stats.totalCommits }}</div>
+          <div class="mt-2 text-sm text-gray-500">{{ stats.commitRank }} of GitHub users</div>
+        </div>
+
+        <!-- Stars -->
+        <div class="bg-gray-50 p-6 rounded-lg border border-gray-200">
+          <div class="text-gray-500 mb-1">Stars earned</div>
+          <div class="text-4xl font-bold text-gray-900">{{ stats.starsEarned }}</div>
+          <div class="mt-2 text-sm text-gray-500">Across all repositories</div>
+        </div>
+      </div>
+
+      <!-- Calendrier de contributions -->
+      <div class="px-8 pb-8">
+        <h3 class="text-xl font-semibold mb-4 text-gray-800">Contribution Heatmap</h3>
+        <div class="overflow-x-auto">
+          <div class="flex mb-2">
+            <div class="w-8"></div>
+            <div *ngFor="let month of monthLabels"
+                 [style.marginLeft.px]="month.index * 14"
+                 class="text-xs text-gray-500">
+              {{ month.name }}
+            </div>
+          </div>
+          <div class="flex">
+            <div class="flex flex-col mr-1">
+              <div *ngFor="let day of ['', 'Mon', '', 'Wed', '', 'Fri', '']"
+                   class="h-4 text-xs text-gray-500 mb-1">
+                {{ day }}
+              </div>
+            </div>
+            <div class="flex">
+              <div *ngFor="let week of weeks" class="flex flex-col mr-1">
+                <div *ngFor="let day of week"
+                     [class]="'w-4 h-4 rounded-sm ' + getColorClass(day.count)"
+                     [title]="day.date + ': ' + day.count + ' commits'">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats secondaires -->
+      <div class="px-8 pb-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Top languages -->
+        <div class="border border-gray-200 rounded-lg p-6">
+          <h3 class="text-lg font-semibold mb-4 text-gray-800">Top Languages</h3>
+          <div class="flex flex-wrap gap-2">
+            <div *ngFor="let lang of stats.topLanguages"
+                 class="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+              {{ lang }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Most active -->
+        <div class="border border-gray-200 rounded-lg p-6">
+          <h3 class="text-lg font-semibold mb-4 text-gray-800">Activity Patterns</h3>
+          <div class="space-y-3">
+            <div>
+              <div class="text-sm text-gray-500">Most active day</div>
+              <div class="font-medium">{{ stats.mostActiveDay.name }} (avg {{ stats.mostActiveDay.commits }} commits)</div>
+            </div>
+            <div>
+              <div class="text-sm text-gray-500">Most active month</div>
+              <div class="font-medium">{{ stats.mostActiveMonth.name }} ({{ stats.mostActiveMonth.commits }} commits)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading state -->
+    <div *ngIf="loading" class="text-center py-20">
+      <div class="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
+      <p class="text-gray-600">Generating your GitHub Wrapped...</p>
+    </div>
+  </div>
+</div>

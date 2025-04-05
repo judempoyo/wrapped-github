@@ -1,16 +1,16 @@
 // github-stats.service.ts
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Observable, catchError, map, throwError } from 'rxjs';
-import { environment } from '../environments/environment';
+import { HttpClient, HttpHeaders, HttpErrorResponse } from '@angular/common/http';
+import { Observable, throwError, catchError, map, shareReplay } from 'rxjs';
 
-interface ContributionDay {
+export interface ContributionDay {
   contributionCount: number;
   date: string;
   weekday: number;
 }
 
 export interface GitHubStats {
+  username: string;
   longestStreak: number;
   totalCommits: number;
   commitRank: string;
@@ -25,74 +25,60 @@ export interface GitHubStats {
   };
   starsEarned: number;
   topLanguages: string[];
+  avatarUrl: string;
+  followers: number;
+  following: number;
+  repositories: number;
 }
 
 @Injectable({
   providedIn: 'root'
 })
 export class GitHubStatsService {
-  private readonly WEEKDAY_NAMES = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-  ] as const;
-
-  private readonly MONTH_NAMES = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ] as const;
+  private cache = new Map<string, Observable<GitHubStats>>();
+  private readonly CURRENT_YEAR = new Date().getFullYear();
+  private readonly WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  private readonly MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
   constructor(private http: HttpClient) {}
 
-  /**
-   * Fetches GitHub statistics for a given username
-   * @param username GitHub username
-   * @returns Observable with GitHub stats
-   */
-  getGitHubStats(username: string): Observable<GitHubStats> {
+  getGitHubStats(username: string, githubToken: string): Observable<GitHubStats> {
     if (!username) {
       return throwError(() => new Error('Username is required'));
     }
 
-    // In a real app, you would call your backend API here
-    // For demonstration, we'll simulate the processing
-    return this.fetchGitHubData(username).pipe(
-      map(userData => this.processGitHubData(userData)),
-      catchError(this.handleError)
+    if (!githubToken) {
+      return throwError(() => new Error('GitHub token is required'));
+    }
+
+    if (this.cache.has(username)) {
+      return this.cache.get(username)!;
+    }
+
+    const stats$ = this.fetchGitHubData(username, githubToken).pipe(
+      map(userData => this.processGitHubData(username, userData)),
+      catchError(this.handleError),
+      shareReplay(1)
     );
+
+    this.cache.set(username, stats$);
+    return stats$;
   }
 
-  /**
-   * Simulates fetching data from GitHub API
-   * In a real app, this should be a call to your backend
-   */
-  private fetchGitHubData(username: string): Observable<any> {
-    // Note: In a production app, you should call your backend API
-    // that has the GitHub token, not call GitHub directly from Angular
-    const headers = {};
-
-    if (environment.githubToken) {
-      headers['Authorization'] = `token ${environment.githubToken}`;
-    }
+  private fetchGitHubData(username: string, token: string): Observable<any> {
+    const headers = new HttpHeaders({
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    });
 
     const query = `
       query($username: String!) {
         user(login: $username) {
-          contributionsCollection {
+          avatarUrl
+          followers { totalCount }
+          following { totalCount }
+          repositories { totalCount }
+          contributionsCollection(from: "${this.CURRENT_YEAR}-01-01T00:00:00Z", to: "${this.CURRENT_YEAR}-12-31T23:59:59Z") {
             contributionCalendar {
               totalContributions
               weeks {
@@ -116,62 +102,51 @@ export class GitHubStatsService {
       }
     `;
 
-    return this.http.post('https://api.github.com/graphql', {
-      query,
-      variables: { username }
-    }, { headers }).pipe(
-      catchError(this.handleError)
+    return this.http.post(
+      'https://api.github.com/graphql',
+      { query, variables: { username } },
+      { headers }
     );
   }
 
-  /**
-   * Processes raw GitHub data into formatted statistics
-   */
-  private processGitHubData(userData: any): GitHubStats {
-    // Process contribution data for the current year
-    const contributionDays = userData.data.user.contributionsCollection.contributionCalendar.weeks
-      .flatMap((week: any) => week.contributionDays)
-      .filter((day: any) => new Date(day.date) >= new Date(`${new Date().getFullYear()}-01-01`));
+  private processGitHubData(username: string, userData: any): GitHubStats {
+    const user = userData.data.user;
+    const contributions = user.contributionsCollection.contributionCalendar;
+    const contributionDays = contributions.weeks.flatMap((week: any) => week.contributionDays);
 
-    // Calculate monthly contribution statistics
+    // Calculate monthly commits
     const monthlyCommits: Record<string, number> = {};
     contributionDays.forEach((day: ContributionDay) => {
-      const month = new Date(day.date).getMonth() + 1;
-      const monthKey = month.toString().padStart(2, "0");
-      monthlyCommits[monthKey] = (monthlyCommits[monthKey] || 0) + day.contributionCount;
+      const month = new Date(day.date).getMonth();
+      monthlyCommits[month] = (monthlyCommits[month] || 0) + day.contributionCount;
     });
 
-    // Calculate daily contribution patterns
-    const dailyCommits: Record<string, number> = {};
+    // Calculate daily commits
+    const dailyCommits: Record<number, number> = {};
     contributionDays.forEach((day: ContributionDay) => {
       dailyCommits[day.weekday] = (dailyCommits[day.weekday] || 0) + day.contributionCount;
     });
 
-    // Find peak activity periods
-    const [mostActiveMonth] = Object.entries(monthlyCommits).sort(([, a], [, b]) => b - a);
-    const [mostActiveDay] = Object.entries(dailyCommits).sort(([, a], [, b]) => b - a);
+    // Find most active month and day
+    const mostActiveMonth = Object.entries(monthlyCommits).sort((a, b) => b[1] - a[1])[0];
+    const mostActiveDay = Object.entries(dailyCommits).sort((a, b) => b[1] - a[1])[0];
 
-    // Calculate repository statistics
-    const totalStars = userData.data.user.repositories.nodes.reduce(
-      (acc: number, repo: any) => acc + repo.stargazerCount, 0
-    );
+    // Calculate stars
+    const totalStars = user.repositories.nodes.reduce((sum: number, repo: any) => sum + repo.stargazerCount, 0);
 
-    // Process programming language statistics
-    const languages = userData.data.user.repositories.nodes.reduce(
-      (acc: Record<string, number>, repo: any) => {
-        if (repo.primaryLanguage?.name) {
-          acc[repo.primaryLanguage.name] = (acc[repo.primaryLanguage.name] || 0) + 1;
-        }
-        return acc;
-      }, {}
-    );
-
+    // Calculate top languages
+    const languages: Record<string, number> = {};
+    user.repositories.nodes.forEach((repo: any) => {
+      if (repo.primaryLanguage?.name) {
+        languages[repo.primaryLanguage.name] = (languages[repo.primaryLanguage.name] || 0) + 1;
+      }
+    });
     const topLanguages = Object.entries(languages)
-      .sort(([, a], [, b]) => (b as number) - (a as number))
+      .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([lang]) => lang);
 
-    // Calculate contribution streaks
+    // Calculate streaks
     let currentStreak = 0;
     let maxStreak = 0;
     for (const day of contributionDays) {
@@ -183,50 +158,49 @@ export class GitHubStatsService {
       }
     }
 
-    const totalCommits = userData.data.user.contributionsCollection.contributionCalendar.totalContributions;
-
     return {
+      username,
       longestStreak: maxStreak,
-      totalCommits,
-      commitRank: this.getCommitRank(totalCommits),
+      totalCommits: contributions.totalContributions,
+      commitRank: this.getCommitRank(contributions.totalContributions),
       calendarData: contributionDays,
       mostActiveDay: {
         name: this.WEEKDAY_NAMES[parseInt(mostActiveDay[0])],
-        commits: Math.round(mostActiveDay[1] / (contributionDays.length / 7)), // Average per day
+        commits: Math.round(mostActiveDay[1] / 52) // Average per week
       },
       mostActiveMonth: {
-        name: this.MONTH_NAMES[parseInt(mostActiveMonth[0]) - 1],
-        commits: mostActiveMonth[1],
+        name: this.MONTH_NAMES[parseInt(mostActiveMonth[0])],
+        commits: mostActiveMonth[1]
       },
       starsEarned: totalStars,
       topLanguages,
+      avatarUrl: user.avatarUrl,
+      followers: user.followers.totalCount,
+      following: user.following.totalCount,
+      repositories: user.repositories.totalCount
     };
   }
 
-  /**
-   * Determines the user's commit rank based on their total number of contributions
-   */
   private getCommitRank(totalCommits: number): string {
-    if (totalCommits >= 5000) return "Top 0.5%-1%";
-    if (totalCommits >= 2000) return "Top 1%-3%";
-    if (totalCommits >= 1000) return "Top 5%-10%";
-    if (totalCommits >= 500) return "Top 10%-15%";
-    if (totalCommits >= 200) return "Top 25%-30%";
-    if (totalCommits >= 50) return "Median 50%";
-    return "Bottom 30%";
+    if (totalCommits >= 5000) return "Godlike 🚀";
+    if (totalCommits >= 2000) return "Elite 💻";
+    if (totalCommits >= 1000) return "Pro 🔥";
+    if (totalCommits >= 500) return "Active 🏃";
+    if (totalCommits >= 200) return "Regular 👍";
+    if (totalCommits >= 50) return "Casual ☕";
+    return "Newbie 🌱";
   }
 
-  /**
-   * Handles HTTP errors
-   */
   private handleError(error: HttpErrorResponse) {
     console.error('GitHub API error:', error);
-    let errorMessage = 'Failed to fetch GitHub statistics';
 
-    if (error.status === 404) {
-      errorMessage = 'GitHub user not found';
+    let errorMessage = 'Failed to fetch GitHub statistics';
+    if (error.status === 401) {
+      errorMessage = 'Invalid GitHub token. Please check your token and try again.';
     } else if (error.status === 403) {
-      errorMessage = 'API rate limit exceeded';
+      errorMessage = 'API rate limit exceeded. Please try again later.';
+    } else if (error.status === 404) {
+      errorMessage = 'GitHub user not found. Please check the username.';
     } else if (error.error?.message) {
       errorMessage = error.error.message;
     }
